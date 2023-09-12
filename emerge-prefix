@@ -1,0 +1,130 @@
+#!/bin/bash
+export PACKAGE_NAME="/usr/local/microsoft"
+
+export PORTAGE_CONFIGROOT="/build/amd64-usr"
+export SYSROOT="${SYSROOT:-/build/amd64-usr}"
+export ROOT="/build/amd64-usr"
+
+sudo -E emerge --root-deps "$@"
+
+if ! [ -x "$(command -v ${PORTAGE_CONFIGROOT}/bin/patchelf)" ]; then
+    sudo -E emerge --root-deps patchelf
+fi
+
+#Read package name
+pkg="${1}"
+#Read shared object dependencies from installed package
+shared_object_deps=$(ldd "${PORTAGE_CONFIGROOT}/bin/${pkg}")
+echo "#############################"
+echo "Binary depenenices for ${pkg}"
+echo "${shared_object_deps}"
+echo "#############################"
+echo ""
+echo ""
+
+#Parse shared object dependencies to get list of shared objects
+mapfile -t shared_objects < <(ldd "${PORTAGE_CONFIGROOT}/bin/${pkg}" | grep '=>')
+
+# shared_objects_output=$(echo "${shared_object_deps}" | awk '/ => / { print $1 } { print $3 }')
+echo "#############################"
+echo "Shared objects names"
+echo "${shared_objects[@]}"
+echo "#############################"
+echo ""
+echo ""
+
+#sudo patchelf --replace-needed libreadline.so.8 /usr/local/microsoft/bash/lib64/libreadline.so.8 ./bash
+
+# Create systemd-sysext directory structure and rewrite elf file
+dest_dir="${PACKAGE_NAME}/${pkg}"
+dest_binary="${dest_dir}/usr/bin/${pkg}"
+
+bin_folders=( "usr/lib/extension-release.d" "usr/bin")
+
+#loop over bin_folders to create folder structure under package name
+for fold in "${bin_folders[@]}"; do
+    sudo mkdir -p "${dest_dir}/${fold}"
+done
+
+echo "#############################"
+echo "Start coping binary"
+#Copy patched binary into systemd-sysext folder structure
+sudo sudo cp -v "${PORTAGE_CONFIGROOT}/bin/${pkg}" "${dest_binary}"
+echo "done"
+echo "#############################"
+echo ""
+echo ""
+
+echo "#############################"
+echo "Start coping shared objects and binary"
+
+#Patch elf files and copy shared object libararies to systext folder structure
+for obj in "${shared_objects[@]}"; do
+    key=$(echo "${obj}" | awk '{print $1}')
+    val=$(echo "${obj}" | awk '{print $3}')
+    #Copy shared object to systemd-sysext folder structure
+    sudo mkdir -p "$(dirname "${dest_dir}${dest_dir}${val}")"
+
+    echo "copy ${val} to ${dest_dir}${dest_dir}${val}"
+    sudo sudo cp -v "${val}" "${dest_dir}${dest_dir}${val}"
+
+    sudo mkdir -p "$(dirname "${dest_dir}${val}")"
+    sudo sudo cp -v "${val}" "${dest_dir}${val}"
+
+
+    #Patch elf file to use shared object from systemd-sysext folder structure
+    echo "patchelf ${key} => ${dest_dir}${val}"
+    echo ""
+    echo "binary check"
+    ldd "${dest_binary}"
+    echo ""
+    sudo patchelf --replace-needed "${key}" "${dest_dir}${val}" "${dest_binary}"
+
+    # check if lib is replaced
+    mapfile -t libs < <(ldd "${dest_binary}" | awk '/ => / { print $1 }')
+    echo "Check for key:${key} in ${libs[*]}"
+    if [[ "${libs[*]}" = *"${key}"* ]]; then
+        echo "patchelf replace failed"
+        sudo patchelf --remove-needed "${key}" "${dest_binary}"
+        echo ""
+        echo "binary check"
+        ldd "${dest_binary}"
+        echo ""
+
+        sudo patchelf --add-needed "${dest_dir}${val}" "${dest_binary}"
+        echo ""
+        echo "binary check"
+        ldd "${dest_binary}"
+        echo ""
+    else
+        echo "patchelf replace worked fine"
+    fi
+done
+echo "#############################"
+echo ""
+echo ""
+
+echo "#############################"
+echo "Check new binary dependencies"
+ldd "${dest_binary}"
+echo "#############################"
+echo ""
+echo ""
+
+
+# check if folder already exists
+sysext_backery="/tmp/sysext-bakery"
+if [ -d "${PACKAGE_NAME}/${pkg}" ]; then
+    git clone https://github.com/flatcar/sysext-bakery "${sysext_backery}"
+fi
+
+pushd "${PACKAGE_NAME}" || exit 1
+    export ARCH="x86-64"
+    sudo "${sysext_backery}"/bake.sh "${pkg}" "${ARCH}"
+popd || exit 1
+
+
+echo "#############################"
+echo "DEVELOPMENT ONLY"
+cp  "${dest_dir}.raw" "/home/sdk/trunk/src/scripts/${pkg}.raw"
+echo "#############################"
