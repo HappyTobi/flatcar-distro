@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# Copyright (c) 2021 The Flatcar Maintainers.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+## TODO
+## option to skipp installation and bootsrap only?
+
+SCRIPT_ROOT=$(dirname "$0")
+
+# shellcheck source=lib/shflags/shflags
+. "${SCRIPT_ROOT}/lib/shflags/shflags" || exit 1
+
+#
+# globals
+#
+cross_boss_dir="/tmp/cross-boss"
+
+# Developer-visible flags.
+DEFINE_string prefix_dir "" \
+  "The directory that is used to prefix the build."
+DEFINE_string workdir "${SCRIPT_ROOT}/prefix/staging" \
+  "Workdir that is uses to build staging environment."
+DEFINE_string arch "amd64" \
+  "CPU architecture that is used <amd64|arm>."
+
+FLAGS_HELP="usage: $(basename "$0") [flags]
+
+bootstrap_prefix_environment install all required packages and dependencies to emerge prefixed packages.
+"
+
+# Parse command line
+FLAGS "$@" || exit 1
+eval set -- "${FLAGS_ARGV}"
+
+if [[ -z "${FLAGS_prefix_dir}" ]]; then
+  echo "Error: --prefix_dir is required."
+  exit 1
+fi
+
+copy_portage_configuration() {
+    if [ ! -d "${FLAGS_workdir}/etc/portage" ]; then
+        echo -e "\n###### linking portage configuration to ${FLAGS_workdir} ######"
+        sudo mkdir -p "${FLAGS_workdir}/etc"
+        # TODO or should we just link the config?
+        sudo cp -r "${SCRIPT_ROOT}/../third_party/prefix-overlay/portage" "${FLAGS_workdir}/etc"
+    fi
+}
+
+install_required_packages() {
+    echo -e "\n###### installing required packages ######"
+    # TODO should we set the portage config root to yours? (stage dir once?)
+    #export PORTAGE_CONFIGROOT="/build/amd64-usr"
+    sudo emerge sys-apps/bubblewrap
+    # TODO is that still required when we use the gentoo upstream package?
+    #sudo emerge -1 ">=dev-python/gpep517-15"
+}
+
+install_cross_boss() {
+    if [ ! -d "${cross_boss_dir}" ]; then
+        echo -e "\n###### installing cross-boss to ${cross_boss_dir} ######"
+        git clone https://github.com/chewi/cross-boss "${cross_boss_dir}"
+    fi
+}
+
+copy_portage_configuration
+install_required_packages
+install_cross_boss
+
+sudo env EPREFIX="${FLAGS_prefix_dir}" "${cross_boss_dir}/bin/cb-bootstrap" "${FLAGS_workdir}"
